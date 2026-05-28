@@ -1,0 +1,426 @@
+openapi: 3.1.0
+info:
+  title: GophKeeper API
+  version: 1.0.0
+  description: |
+    API для аутентификации клиентов и синхронизации непрозрачных элементов
+    хранилища, зашифрованных на стороне клиента. Открытое содержимое секретов
+    и мастер-пароли никогда не передаются в этот API.
+servers:
+  - url: https://localhost:8443
+    description: Local TLS server
+tags:
+  - name: Auth
+  - name: Vault
+  - name: Operations
+paths:
+  /health:
+    get:
+      tags: [Operations]
+      operationId: health
+      responses:
+        "200":
+          description: Server is ready to accept requests.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    const: ok
+                required: [status]
+  /v1/auth/register:
+    post:
+      tags: [Auth]
+      operationId: register
+      summary: Register an account with client-encrypted vault material.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Account registered.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /v1/auth/login/parameters:
+    post:
+      tags: [Auth]
+      operationId: loginParameters
+      summary: Retrieve Argon2id inputs required for local key derivation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+              required: [username]
+      responses:
+        "200":
+          description: Key derivation inputs.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginParameters"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /v1/auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      summary: Create an authenticated device session.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Authorized session and wrapped vault key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /v1/auth/refresh:
+    post:
+      tags: [Auth]
+      operationId: refresh
+      summary: Rotate a refresh token into a new session token pair.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token:
+                  type: string
+              required: [refresh_token]
+      responses:
+        "200":
+          description: New token pair.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /v1/auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      security:
+        - bearerAuth: []
+      summary: Revoke the current authenticated session.
+      responses:
+        "204":
+          description: Session revoked.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /v1/items/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Client-generated opaque item identifier.
+    get:
+      tags: [Vault]
+      operationId: getItem
+      security:
+        - bearerAuth: []
+      summary: Retrieve one active encrypted item.
+      responses:
+        "200":
+          description: Encrypted item envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EncryptedItem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags: [Vault]
+      operationId: putItem
+      security:
+        - bearerAuth: []
+      summary: Create or update one encrypted item.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutItemRequest"
+      responses:
+        "200":
+          description: Stored encrypted item with its new version and revision.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EncryptedItem"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      tags: [Vault]
+      operationId: deleteItem
+      security:
+        - bearerAuth: []
+      summary: Tombstone an existing encrypted item.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                base_version:
+                  type: integer
+                  format: int64
+                  minimum: 1
+              required: [base_version]
+      responses:
+        "200":
+          description: Synchronizable deletion marker.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EncryptedItem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /v1/sync:
+    get:
+      tags: [Vault]
+      operationId: sync
+      security:
+        - bearerAuth: []
+      summary: Obtain all latest item states changed after a revision cursor.
+      parameters:
+        - name: after
+          in: query
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+            default: 0
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        "200":
+          description: Page of encrypted changes and the cursor to persist.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+  responses:
+    BadRequest:
+      description: Invalid request data.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: Credentials are invalid, expired, or revoked.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: The requested item is not visible to this user.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: Username exists or item base version is stale.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+    Base64:
+      type: string
+      format: byte
+      description: Base64-encoded bytes as emitted by Go JSON encoding.
+    KDFParameters:
+      type: object
+      properties:
+        time:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 10
+        memory:
+          type: integer
+          format: int32
+          description: Argon2id memory cost in KiB.
+          minimum: 8192
+          maximum: 1048576
+        parallelism:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 16
+        key_length:
+          type: integer
+          format: int32
+          const: 32
+      required: [time, memory, parallelism, key_length]
+    RegisterRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 128
+        auth_salt:
+          $ref: "#/components/schemas/Base64"
+        kdf:
+          $ref: "#/components/schemas/KDFParameters"
+        auth_key:
+          $ref: "#/components/schemas/Base64"
+        wrapped_vault_key:
+          $ref: "#/components/schemas/Base64"
+        wrap_nonce:
+          $ref: "#/components/schemas/Base64"
+      required: [username, auth_salt, kdf, auth_key, wrapped_vault_key, wrap_nonce]
+    LoginParameters:
+      type: object
+      properties:
+        auth_salt:
+          $ref: "#/components/schemas/Base64"
+        kdf:
+          $ref: "#/components/schemas/KDFParameters"
+      required: [auth_salt, kdf]
+    LoginRequest:
+      type: object
+      properties:
+        username:
+          type: string
+        auth_key:
+          $ref: "#/components/schemas/Base64"
+        device_name:
+          type: string
+      required: [username, auth_key]
+    TokenPair:
+      type: object
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+      required: [access_token, refresh_token, expires_at]
+    LoginResponse:
+      allOf:
+        - $ref: "#/components/schemas/TokenPair"
+        - type: object
+          properties:
+            username:
+              type: string
+            auth_salt:
+              $ref: "#/components/schemas/Base64"
+            kdf:
+              $ref: "#/components/schemas/KDFParameters"
+            wrapped_vault_key:
+              $ref: "#/components/schemas/Base64"
+            wrap_nonce:
+              $ref: "#/components/schemas/Base64"
+          required: [username, auth_salt, kdf, wrapped_vault_key, wrap_nonce]
+    EncryptedItem:
+      type: object
+      properties:
+        id:
+          type: string
+        version:
+          type: integer
+          format: int64
+        revision:
+          type: integer
+          format: int64
+        crypto_version:
+          type: integer
+          enum: [0, 1]
+          description: Value 0 identifies a deletion tombstone; active ciphertext uses 1.
+        nonce:
+          $ref: "#/components/schemas/Base64"
+        ciphertext:
+          $ref: "#/components/schemas/Base64"
+        deleted:
+          type: boolean
+        updated_at:
+          type: string
+          format: date-time
+      required: [id, version, revision, crypto_version, deleted, updated_at]
+    PutItemRequest:
+      type: object
+      properties:
+        base_version:
+          type: integer
+          format: int64
+          minimum: 0
+        crypto_version:
+          type: integer
+          const: 1
+        nonce:
+          $ref: "#/components/schemas/Base64"
+        ciphertext:
+          allOf:
+            - $ref: "#/components/schemas/Base64"
+          description: Base64 ciphertext whose decoded content is limited to 16 MiB.
+      required: [base_version, crypto_version, nonce, ciphertext]
+    SyncResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/EncryptedItem"
+        current_revision:
+          type: integer
+          format: int64
+      required: [items, current_revision]
