@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"mime"
 	"net/http"
 	"os"
@@ -36,7 +37,7 @@ type remote interface {
 	GetItem(context.Context, string, string) (protocol.EncryptedItem, error)
 	PutItem(context.Context, string, protocol.EncryptedItem, int64) (protocol.EncryptedItem, error)
 	DeleteItem(context.Context, string, string, int64) (protocol.EncryptedItem, error)
-	Sync(context.Context, string, int64) (protocol.SyncResponse, error)
+	Sync(context.Context, string, int64) iter.Seq2[protocol.EncryptedItem, error]
 }
 
 // App хранит потоки ввода-вывода и запускает подкоманды CLI.
@@ -489,12 +490,11 @@ func (a *App) list(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	response, err := client.Sync(ctx, profile.AccessToken, 0)
-	if err != nil {
-		return err
-	}
 	fmt.Fprintln(a.output, "ID\tTYPE\tNAME\tMETADATA")
-	for _, item := range response.Items {
+	for item, err := range client.Sync(ctx, profile.AccessToken, 0) {
+		if err != nil {
+			return err
+		}
 		if item.Deleted {
 			continue
 		}
@@ -651,7 +651,7 @@ func (a *App) printSecret(secret vaultcrypto.Secret, outputFile string) error {
 			fmt.Fprintf(a.output, "File: %s (%d bytes). Use get --out PATH %s to write its content.\n", secret.Binary.Filename, len(secret.Binary.Data), secret.ID)
 			return nil
 		}
-		if err := os.WriteFile(outputFile, secret.Binary.Data, 0o600); err != nil {
+		if err := writeFileInRoot(outputFile, secret.Binary.Data, 0o600); err != nil {
 			return err
 		}
 		fmt.Fprintf(a.output, "Written to %s.\n", outputFile)
@@ -659,6 +659,33 @@ func (a *App) printSecret(secret vaultcrypto.Secret, outputFile string) error {
 		fmt.Fprintf(a.output, "Issuer: %s\nAccount: %s\n", secret.OTP.Issuer, secret.OTP.Account)
 	}
 	return nil
+}
+
+func writeFileInRoot(name string, data []byte, perm os.FileMode) error {
+	dir, file := filepath.Split(name)
+	if file == "" {
+		return fmt.Errorf("output path %q does not name a file", name)
+	}
+	if dir == "" {
+		dir = "."
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	out, err := root.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	n, err := out.Write(data)
+	if err == nil && n < len(data) {
+		err = io.ErrShortWrite
+	}
+	if closeErr := out.Close(); err == nil {
+		err = closeErr
+	}
+	return err
 }
 
 func (a *App) confirmedPassword() (string, error) {

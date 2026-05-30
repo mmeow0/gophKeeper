@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -114,22 +115,27 @@ func (c *Client) DeleteItem(ctx context.Context, accessToken, id string, baseVer
 
 const syncPageLimit = 500
 
-// Sync получает все изменения после указанной ревизии и сам дочитывает страницы
-// сервера, чтобы CLI не потерял записи при большом хранилище.
-func (c *Client) Sync(ctx context.Context, accessToken string, after int64) (protocol.SyncResponse, error) {
-	var combined protocol.SyncResponse
-	cursor := after
-	for {
-		page, err := c.syncPage(ctx, accessToken, cursor, syncPageLimit)
-		if err != nil {
-			return protocol.SyncResponse{}, err
+// Sync получает изменения после указанной ревизии, дочитывая страницы
+// сервера по мере обхода последовательности.
+func (c *Client) Sync(ctx context.Context, accessToken string, after int64) iter.Seq2[protocol.EncryptedItem, error] {
+	return func(yield func(protocol.EncryptedItem, error) bool) {
+		cursor := after
+		for {
+			page, err := c.syncPage(ctx, accessToken, cursor, syncPageLimit)
+			if err != nil {
+				yield(protocol.EncryptedItem{}, err)
+				return
+			}
+			for _, item := range page.Items {
+				if !yield(item, nil) {
+					return
+				}
+			}
+			if page.CurrentRevision <= cursor || len(page.Items) < syncPageLimit {
+				return
+			}
+			cursor = page.CurrentRevision
 		}
-		combined.Items = append(combined.Items, page.Items...)
-		combined.CurrentRevision = page.CurrentRevision
-		if page.CurrentRevision <= cursor || len(page.Items) < syncPageLimit {
-			return combined, nil
-		}
-		cursor = page.CurrentRevision
 	}
 }
 

@@ -111,6 +111,22 @@ func TestCLIUsageAndValidation(t *testing.T) {
 	}
 }
 
+func TestWriteFileInRootRejectsEscapingSymlink(t *testing.T) {
+	rootDir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.bin")
+	link := filepath.Join(rootDir, "restored.bin")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	if err := writeFileInRoot(link, []byte{1, 2, 3}, 0o600); err == nil {
+		t.Fatal("expected escaping symlink to be rejected")
+	}
+	if _, err := os.Stat(outside); !os.IsNotExist(err) {
+		t.Fatalf("outside target was touched: %v", err)
+	}
+}
+
 func testRemote(t *testing.T) *clientapi.Client {
 	t.Helper()
 	repository := store.NewMemory()

@@ -32,14 +32,11 @@ func TestEncryptedSyncConflictAndDeletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	changes, err := client.Sync(context.Background(), second.AccessToken, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(changes.Items) != 1 || changes.Items[0].Revision != 1 {
+	changes := syncItems(t, client, second.AccessToken, 0)
+	if len(changes) != 1 || changes[0].Revision != 1 {
 		t.Fatalf("unexpected initial sync: %#v", changes)
 	}
-	decrypted, err := vaultcrypto.DecryptSecret(secondKey, changes.Items[0])
+	decrypted, err := vaultcrypto.DecryptSecret(secondKey, changes[0])
 	if err != nil || decrypted.Login.Password != "secret" {
 		t.Fatalf("second client could not decrypt synchronized secret: %#v, %v", decrypted, err)
 	}
@@ -63,11 +60,8 @@ func TestEncryptedSyncConflictAndDeletion(t *testing.T) {
 	if !deleted.Deleted || deleted.Revision != 3 {
 		t.Fatalf("unexpected tombstone: %#v", deleted)
 	}
-	changes, err = client.Sync(context.Background(), second.AccessToken, updated.Revision)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(changes.Items) != 1 || !changes.Items[0].Deleted {
+	changes = syncItems(t, client, second.AccessToken, updated.Revision)
+	if len(changes) != 1 || !changes[0].Deleted {
 		t.Fatalf("expected synchronized tombstone: %#v", changes)
 	}
 }
@@ -161,6 +155,18 @@ func newClient(t *testing.T) *clientapi.Client {
 	t.Helper()
 	client, _ := clients(t)
 	return client
+}
+
+func syncItems(t *testing.T, client *clientapi.Client, accessToken string, after int64) []protocol.EncryptedItem {
+	t.Helper()
+	var items []protocol.EncryptedItem
+	for item, err := range client.Sync(context.Background(), accessToken, after) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, item)
+	}
+	return items
 }
 
 func clients(t *testing.T) (*clientapi.Client, *http.Client) {

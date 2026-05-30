@@ -47,15 +47,47 @@ func TestSyncFollowsServerPages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := client.Sync(context.Background(), "token", 0)
-	if err != nil {
-		t.Fatal(err)
+	var got []protocol.EncryptedItem
+	for item, err := range client.Sync(context.Background(), "token", 0) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, item)
 	}
-	if got.CurrentRevision != 501 || len(got.Items) != 501 {
-		t.Fatalf("Sync() = revision %d, %d items", got.CurrentRevision, len(got.Items))
+	if len(got) != 501 || got[len(got)-1].Revision != 501 {
+		t.Fatalf("Sync() = %d items, last revision %d", len(got), got[len(got)-1].Revision)
 	}
 	if !reflect.DeepEqual(afters, []int64{0, 500}) {
 		t.Fatalf("sync cursors = %v", afters)
+	}
+}
+
+func TestSyncStopsWhenCallerStops(t *testing.T) {
+	var requests int
+	transport := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		requests++
+		response := protocol.SyncResponse{CurrentRevision: 500}
+		for revision := int64(1); revision <= 500; revision++ {
+			response.Items = append(response.Items, protocol.EncryptedItem{ID: strconv.FormatInt(revision, 10), Revision: revision})
+		}
+		return jsonResponse(http.StatusOK, response)
+	})
+	client, err := New("http://localhost", &http.Client{Transport: transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for item, err := range client.Sync(context.Background(), "token", 0) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if item.Revision != 1 {
+			t.Fatalf("first item revision = %d", item.Revision)
+		}
+		break
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d", requests)
 	}
 }
 

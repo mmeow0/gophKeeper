@@ -18,6 +18,24 @@ type Postgres struct {
 	db *sql.DB
 }
 
+type sessionHashColumn string
+
+const (
+	sessionAccessTokenHashColumn  sessionHashColumn = "access_token_hash"
+	sessionRefreshTokenHashColumn sessionHashColumn = "refresh_token_hash"
+)
+
+const (
+	sessionByAccessHashQuery = `
+		SELECT id,user_id,access_token_hash,refresh_token_hash,access_expires_at,
+		       refresh_expires_at,device_name,revoked_at,created_at
+		FROM sessions WHERE access_token_hash=$1`
+	sessionByRefreshHashQuery = `
+		SELECT id,user_id,access_token_hash,refresh_token_hash,access_expires_at,
+		       refresh_expires_at,device_name,revoked_at,created_at
+		FROM sessions WHERE refresh_token_hash=$1`
+)
+
 // OpenPostgres открывает и проверяет подключение к PostgreSQL-хранилищу.
 func OpenPostgres(ctx context.Context, dataSourceName string) (*Postgres, error) {
 	db, err := sql.Open("pgx", dataSourceName)
@@ -101,12 +119,12 @@ func (p *Postgres) CreateSession(ctx context.Context, session Session) error {
 
 // SessionByAccessHash получает сессию по хэшу access-токена.
 func (p *Postgres) SessionByAccessHash(ctx context.Context, hash []byte) (Session, error) {
-	return p.sessionByHash(ctx, "access_token_hash", hash)
+	return p.sessionByHash(ctx, sessionAccessTokenHashColumn, hash)
 }
 
 // SessionByRefreshHash получает сессию по хэшу refresh-токена.
 func (p *Postgres) SessionByRefreshHash(ctx context.Context, hash []byte) (Session, error) {
-	return p.sessionByHash(ctx, "refresh_token_hash", hash)
+	return p.sessionByHash(ctx, sessionRefreshTokenHashColumn, hash)
 }
 
 // RevokeSession запрещает дальнейшее использование токенов этой сессии.
@@ -245,10 +263,17 @@ func (p *Postgres) Sync(ctx context.Context, userID string, after int64, limit i
 	return response, nil
 }
 
-func (p *Postgres) sessionByHash(ctx context.Context, column string, hash []byte) (Session, error) {
+func (p *Postgres) sessionByHash(ctx context.Context, column sessionHashColumn, hash []byte) (Session, error) {
 	var session Session
-	query := `SELECT id,user_id,access_token_hash,refresh_token_hash,access_expires_at,
-	          refresh_expires_at,device_name,revoked_at,created_at FROM sessions WHERE ` + column + `=$1`
+	var query string
+	switch column {
+	case sessionAccessTokenHashColumn:
+		query = sessionByAccessHashQuery
+	case sessionRefreshTokenHashColumn:
+		query = sessionByRefreshHashQuery
+	default:
+		return Session{}, fmt.Errorf("unsupported session hash column %q", column)
+	}
 	err := p.db.QueryRowContext(ctx, query, hash).Scan(
 		&session.ID, &session.UserID, &session.AccessTokenHash, &session.RefreshTokenHash,
 		&session.AccessExpiresAt, &session.RefreshExpiresAt, &session.DeviceName,
